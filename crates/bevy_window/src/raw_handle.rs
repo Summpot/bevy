@@ -33,6 +33,14 @@ impl<W: Send + Sync + 'static> WindowWrapper<W> {
             ty: PhantomData,
         }
     }
+
+    /// Clones a typed [`Arc`] to the wrapped window.
+    pub fn clone_window(&self) -> Arc<W> {
+        self.reference
+            .clone()
+            .downcast::<W>()
+            .expect("WindowWrapper should always contain values of its declared window type")
+    }
 }
 
 impl<W: 'static> Deref for WindowWrapper<W> {
