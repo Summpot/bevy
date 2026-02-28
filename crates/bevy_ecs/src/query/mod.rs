@@ -1,3 +1,8 @@
+#![expect(
+    unsafe_op_in_unsafe_fn,
+    reason = "See #11590. To be removed once all applicable unsafe code has an unsafe block with a safety comment."
+)]
+
 //! Contains APIs for retrieving component data from the world.
 
 mod access;
@@ -113,8 +118,8 @@ mod tests {
         component::{Component, ComponentId, Components},
         prelude::{AnyOf, Changed, Entity, Or, QueryState, Resource, With, Without},
         query::{
-            ArchetypeFilter, ArchetypeQueryData, FilteredAccess, Has, QueryCombinationIter,
-            QueryData, QueryFilter, ReadOnlyQueryData, WorldQuery,
+            ArchetypeFilter, ArchetypeQueryData, FilteredAccess, Has, IterQueryData,
+            QueryCombinationIter, QueryData, QueryFilter, ReadOnlyQueryData, WorldQuery,
         },
         schedule::{IntoScheduleConfigs, Schedule},
         storage::{Table, TableRow},
@@ -819,8 +824,8 @@ mod tests {
     /// `QueryData` that performs read access on R to test that resource access is tracked
     struct ReadsRData;
 
-    /// SAFETY:
-    /// `update_component_access` adds resource read access for `R`.
+    // SAFETY:
+    // `update_component_access` adds resource read access for `R`.
     unsafe impl WorldQuery for ReadsRData {
         type Fetch<'w> = ();
         type State = ComponentId;
@@ -863,11 +868,11 @@ mod tests {
         }
 
         fn init_state(world: &mut World) -> Self::State {
-            world.components_registrator().register_resource::<R>()
+            world.components_registrator().register_component::<R>()
         }
 
         fn get_state(components: &Components) -> Option<Self::State> {
-            components.resource_id::<R>()
+            components.component_id::<R>()
         }
 
         fn matches_component_set(
@@ -878,7 +883,7 @@ mod tests {
         }
     }
 
-    /// SAFETY: `Self` is the same as `Self::ReadOnly`
+    // SAFETY: `Self` is the same as `Self::ReadOnly`
     unsafe impl QueryData for ReadsRData {
         const IS_READ_ONLY: bool = true;
         const IS_ARCHETYPAL: bool = true;
@@ -909,8 +914,11 @@ mod tests {
         }
     }
 
-    /// SAFETY: access is read only
+    // SAFETY: access is read only
     unsafe impl ReadOnlyQueryData for ReadsRData {}
+
+    /// SAFETY: access is read only
+    unsafe impl IterQueryData for ReadsRData {}
 
     impl ArchetypeQueryData for ReadsRData {}
 
