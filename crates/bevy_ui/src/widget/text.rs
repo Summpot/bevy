@@ -241,6 +241,7 @@ pub fn measure_text_system(
     mut text_query: Query<
         (
             Entity,
+            Ref<Text>,
             Ref<TextLayout>,
             &mut ContentSize,
             &mut TextNodeFlags,
@@ -259,6 +260,7 @@ pub fn measure_text_system(
 ) {
     for (
         entity,
+        text,
         block,
         mut content_size,
         mut text_flags,
@@ -273,6 +275,7 @@ pub fn measure_text_system(
         if !(1e-5
             < (computed_target.scale_factor() - computed_node.inverse_scale_factor.recip()).abs()
             || computed.needs_rerender(computed_target.is_changed(), rem_size.is_changed())
+            || text.is_changed()
             || text_flags.needs_measure_fn
             || content_size.is_added()
             || hinting.is_changed())
