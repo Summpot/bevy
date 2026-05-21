@@ -14,8 +14,10 @@ use crate::{
         ReleaseStateQueryData, SingleEntityQueryData,
     },
     relationship::RelationshipHookMode,
-    resource::Resource,
+    resource::{Resource, ResourceEntities},
     storage::{SparseSets, Table},
+    system::EntityCommands,
+    template::{SceneEntityReferences, Template, TemplateContext},
     world::{
         error::EntityComponentError, unsafe_world_cell::UnsafeEntityCell, ComponentEntry,
         DynamicComponentFetch, EntityMut, EntityRef, FilteredEntityMut, FilteredEntityRef, Mut,
@@ -671,7 +673,7 @@ impl<'w> EntityWorldMut<'w> {
     /// use [`get_resource_or_insert_with`](World::get_resource_or_insert_with).
     #[inline]
     #[track_caller]
-    pub fn resource_mut<R: Resource>(&mut self) -> Mut<'_, R> {
+    pub fn resource_mut<R: Resource<Mutability = Mutable>>(&mut self) -> Mut<'_, R> {
         self.world.resource_mut::<R>()
     }
 
@@ -683,7 +685,7 @@ impl<'w> EntityWorldMut<'w> {
 
     /// Gets a mutable reference to the resource of the given type if it exists
     #[inline]
-    pub fn get_resource_mut<R: Resource>(&mut self) -> Option<Mut<'_, R>> {
+    pub fn get_resource_mut<R: Resource<Mutability = Mutable>>(&mut self) -> Option<Mut<'_, R>> {
         self.world.get_resource_mut()
     }
 
@@ -729,6 +731,21 @@ impl<'w> EntityWorldMut<'w> {
                 f(&mut this, res)
             })
         })
+    }
+
+    /// Retrieves this world's [`ResourceEntities`].
+    #[inline]
+    #[track_caller]
+    pub fn resource_entities(&self) -> &ResourceEntities {
+        self.world.resource_entities()
+    }
+
+    /// Retrieves the [`Entity`] associated with the resource of type `R`, if it exists.
+    #[inline]
+    #[track_caller]
+    pub fn resource_entity<R: Resource>(&self) -> Option<Entity> {
+        let component_id = self.world.component_id::<R>()?;
+        self.world.resource_entities().get(component_id)
     }
 
     /// Retrieves the change ticks for the given component. This can be useful for implementing change
@@ -1053,8 +1070,10 @@ impl<'w> EntityWorldMut<'w> {
     ) -> &mut Self {
         let location = self.location();
         let change_tick = self.world.change_tick();
+        // SAFETY:
+        // - `location.archetype_id` is part of a valid `EntityLocation`.
         let mut bundle_inserter =
-            BundleInserter::new::<T>(self.world, location.archetype_id, change_tick);
+            unsafe { BundleInserter::new::<T>(self.world, location.archetype_id, change_tick) };
         // SAFETY:
         // - `location` matches current entity and thus must currently exist in the source
         //   archetype for this inserter and its location within the archetype.
@@ -1232,7 +1251,9 @@ impl<'w> EntityWorldMut<'w> {
         let mut remover =
             // SAFETY: The archetype id must be valid since this entity is in it.
             unsafe { BundleRemover::new::<T>(self.world, location.archetype_id, true) }?;
-        // SAFETY: The passed location has the sane archetype as the remover, since they came from the same location.
+        // SAFETY:
+        // - The passed location has the same archetype as the remover, since they came from the same location.
+        // - `location` was obtained from a valid `Self`.
         let (new_location, result) = unsafe {
             remover.remove(
                 entity,
@@ -1295,7 +1316,9 @@ impl<'w> EntityWorldMut<'w> {
         else {
             return self;
         };
-        // SAFETY: The remover archetype came from the passed location and the removal can not fail.
+        // SAFETY:
+        // - The remover archetype came from the passed location and the removal can not fail.
+        // - `location` was obtained from a valid `Self`.
         let new_location = unsafe {
             remover.remove(
                 self.entity,
@@ -1335,7 +1358,9 @@ impl<'w> EntityWorldMut<'w> {
         }) else {
             return self;
         };
-        // SAFETY: The remover archetype came from the passed location and the removal can not fail.
+        // SAFETY:
+        // - The remover archetype came from the passed location and the removal can not fail.
+        // - `location` was obtained from a valid `Self`.
         let new_location = unsafe {
             remover.remove(
                 self.entity,
@@ -1391,7 +1416,9 @@ impl<'w> EntityWorldMut<'w> {
         }) else {
             return self;
         };
-        // SAFETY: The remover archetype came from the passed location and the removal can not fail.
+        // SAFETY:
+        // - The remover archetype came from the passed location and the removal can not fail.
+        // - `old_location` was obtained from a valid `Self`.
         let new_location = unsafe {
             remover.remove(
                 self.entity,
@@ -1442,7 +1469,9 @@ impl<'w> EntityWorldMut<'w> {
         }) else {
             return self;
         };
-        // SAFETY: The remover archetype came from the passed location and the removal can not fail.
+        // SAFETY:
+        // - The remover archetype came from the passed location and the removal can not fail.
+        // - `location` was obtained from a valid `Self`.
         let new_location = unsafe {
             remover.remove(
                 self.entity,
@@ -1506,7 +1535,9 @@ impl<'w> EntityWorldMut<'w> {
             return self;
         };
         remover.relationship_hook_mode = relationship_hook_mode;
-        // SAFETY: The remover archetype came from the passed location and the removal can not fail.
+        // SAFETY:
+        // - The remover archetype came from the passed location and the removal can not fail.
+        // - `location` was obtained from a valid `Self`.
         let new_location = unsafe { remover.remove(self.entity, location, caller, pre_remove) }.0;
 
         self.location = Some(new_location);
@@ -1544,7 +1575,9 @@ impl<'w> EntityWorldMut<'w> {
         }) else {
             return self;
         };
-        // SAFETY: The remover archetype came from the passed location and the removal can not fail.
+        // SAFETY:
+        // - The remover archetype came from the passed location and the removal can not fail.
+        // - `location` was obtained from a valid `Self`.
         let new_location = unsafe {
             remover.remove(
                 self.entity,
@@ -1576,6 +1609,21 @@ impl<'w> EntityWorldMut<'w> {
     pub fn despawn_no_free(mut self) -> Entity {
         self.despawn_no_free_with_caller(MaybeLocation::caller());
         self.entity
+    }
+
+    /// Creates a new [`TemplateContext`] for this entity and passes it into the given `func`.
+    pub fn template_context<T>(
+        &mut self,
+        func: impl FnOnce(&mut TemplateContext) -> crate::error::Result<T>,
+    ) -> crate::error::Result<T> {
+        let mut scene_entities = SceneEntityReferences::default();
+        let mut context = TemplateContext::new(self, &mut scene_entities);
+        func(&mut context)
+    }
+
+    /// Builds the given template using a [`TemplateContext`] generated for this entity.
+    pub fn build_template<T: Template>(&mut self, template: &T) -> crate::error::Result<T::Output> {
+        self.template_context(|context| template.build_template(context))
     }
 
     /// This despawns this entity if it is currently spawned, storing the new [`EntityGeneration`](crate::entity::EntityGeneration) in [`Self::entity`] but not freeing it.
@@ -1842,6 +1890,17 @@ impl<'w> EntityWorldMut<'w> {
         // This will run even in case the closure `f` unwinds.
         let guard = Guard { entity_mut: self };
         f(guard.entity_mut.world)
+    }
+
+    /// Creates a new [`EntityCommands`] instance that writes commands
+    /// Use [`EntityWorldMut::flush`] to apply all queued commands
+    #[inline]
+    pub fn entity_commands(&mut self) -> EntityCommands<'_> {
+        let id = self.id();
+        EntityCommands {
+            entity: id,
+            commands: self.world.commands(),
+        }
     }
 
     /// Updates the internal entity location to match the current location in the internal

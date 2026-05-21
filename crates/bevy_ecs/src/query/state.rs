@@ -7,10 +7,10 @@ use crate::{
     prelude::FromWorld,
     query::{
         ArchetypeFilter, ContiguousQueryData, FilteredAccess, FilteredAccessSet, IterQueryData,
-        QueryCombinationIter, QueryContiguousIter, QueryIter, QueryParIter, SingleEntityQueryData,
-        WorldQuery,
+        QueryCombinationIter, QueryContiguousIter, QueryIter, QueryNotDenseError, QueryParIter,
+        SingleEntityQueryData, WorldQuery,
     },
-    storage::{SparseSetIndex, TableId},
+    storage::TableId,
     system::Query,
     world::{unsafe_world_cell::UnsafeWorldCell, World, WorldId},
 };
@@ -173,7 +173,7 @@ impl<D: QueryData, F: QueryFilter> QueryState<D, F> {
 
     /// Creates a new [`QueryState`] from a given [`World`] and inherits the result of `world.id()`.
     ///
-    /// Unlike [`QueryState::new`], this this does not check access of nested queries,
+    /// Unlike [`QueryState::new`], this does not check access of nested queries,
     /// so [`Self::init_access`] must be called before querying using this state or returning it to safe code.
     ///
     /// # Safety
@@ -560,7 +560,7 @@ impl<D: QueryData, F: QueryFilter> QueryState<D, F> {
         self.validate_world(world.id());
         D::update_archetypes(&mut self.fetch_state, world);
         F::update_archetypes(&mut self.filter_state, world);
-        if self.component_access.required.is_empty() {
+        if self.component_access.required.is_clear() {
             let archetypes = world.archetypes();
             let old_generation =
                 core::mem::replace(&mut self.archetype_generation, archetypes.generation());
@@ -582,9 +582,8 @@ impl<D: QueryData, F: QueryFilter> QueryState<D, F> {
             let potential_archetypes = self
                 .component_access
                 .required
-                .ones()
-                .filter_map(|idx| {
-                    let component_id = ComponentId::get_sparse_set_index(idx);
+                .iter()
+                .filter_map(|component_id| {
                     world
                         .archetypes()
                         .component_index()
@@ -667,13 +666,8 @@ impl<D: QueryData, F: QueryFilter> QueryState<D, F> {
     /// Returns `true` if this query matches a set of components. Otherwise, returns `false`.
     pub fn matches_component_set(&self, set_contains_id: &impl Fn(ComponentId) -> bool) -> bool {
         self.component_access.filter_sets.iter().any(|set| {
-            set.with
-                .ones()
-                .all(|index| set_contains_id(ComponentId::get_sparse_set_index(index)))
-                && set
-                    .without
-                    .ones()
-                    .all(|index| !set_contains_id(ComponentId::get_sparse_set_index(index)))
+            set.with.iter().all(set_contains_id)
+                && set.without.iter().all(|index| !set_contains_id(index))
         })
     }
 
@@ -1479,21 +1473,21 @@ impl<D: QueryData, F: QueryFilter> QueryState<D, F> {
         self.query_mut(world).par_iter_inner()
     }
 
-    /// Returns a contiguous iterator over the query results for the given [`World`] or [`None`] if
+    /// Returns a contiguous iterator over the query results for the given [`World`] or [`Err`] with [`QueryNotDenseError`] if
     /// the query is not dense hence not contiguously iterable.
     #[inline]
     pub fn contiguous_iter<'w, 's>(
         &'s mut self,
         world: &'w World,
-    ) -> Option<QueryContiguousIter<'w, 's, D::ReadOnly, F>>
+    ) -> Result<QueryContiguousIter<'w, 's, D::ReadOnly, F>, QueryNotDenseError>
     where
         D::ReadOnly: ContiguousQueryData,
         F: ArchetypeFilter,
     {
-        self.query(world).contiguous_iter_inner().ok()
+        self.query(world).contiguous_iter_inner()
     }
 
-    /// Returns a contiguous iterator over the query results for the given [`World`] or [`None`] if
+    /// Returns a contiguous iterator over the query results for the given [`World`] or [`Err`] with [`QueryNotDenseError`] if
     /// the query is not dense hence not contiguously iterable.
     ///
     /// This can only be called for mutable queries, see [`Self::contiguous_iter`] for read-only-queries.
@@ -1501,12 +1495,12 @@ impl<D: QueryData, F: QueryFilter> QueryState<D, F> {
     pub fn contiguous_iter_mut<'w, 's>(
         &'s mut self,
         world: &'w mut World,
-    ) -> Option<QueryContiguousIter<'w, 's, D, F>>
+    ) -> Result<QueryContiguousIter<'w, 's, D, F>, QueryNotDenseError>
     where
         D: ContiguousQueryData,
         F: ArchetypeFilter,
     {
-        self.query_mut(world).contiguous_iter_inner().ok()
+        self.query_mut(world).contiguous_iter_inner()
     }
 
     /// Runs `func` on each query result in parallel for the given [`World`], where the last change and
